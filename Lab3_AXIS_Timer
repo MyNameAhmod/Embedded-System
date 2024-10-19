@@ -1,0 +1,133 @@
+#include "xil_printf.h"
+#include "xparameters.h"
+#include "xgpio.h"
+#include "xstatus.h"
+
+// defines
+#define BTNSW_DEVICE_ID XPAR_AXI_GPIO_0_DEVICE_ID
+#define LED_DEVICE_ID XPAR_AXI_GPIO_1_DEVICE_ID
+#define BTN_CHANNEL 1
+#define SW_CHANNEL 2
+#define LED_CHANNEL 1
+
+// global variables
+static TaskHandle_t xTaskQueueSend; // FreeRTOS task handle
+static TaskHandle_t xTaskQueueReceive; // FreeRTOS task handle
+static QueueHandle_t xQueueBtnSw; // FreeRTOS queue handle
+XGpio LedInst; // GPIO device driver instance
+XGpio BtnSwInst; // GPIO device driver instance
+int led_data;
+int valueToSend = 1;
+int receivedValue;
+
+// function declarations
+int initialize();
+static void vTaskQueueSend(void *pvParameters);
+static void vTaskQueueReceive(void *pvParameters);
+// *********************************MAIN ***************************************
+int main(void) {
+
+	int status;
+
+	// Run Initialization
+	if (initialize() != XST_SUCCESS) {
+		xil_printf("GPIO setup failed!\r\n");
+	}
+
+	//Create Tasks and Start Scheduler
+	xQueueBtnSw = xQueueCreate(4, sizeof(int32_t));
+	xTaskCreate(vTaskQueueSend, (const char *) "Sender", 1000, NULL, tskIDLE_PRIORITY + 1, &xTaskQueueSend);
+	xTaskCreate(vTaskQueueReceive, (const char *) "Receiver", 1000, NULL, tskIDLE_PRIORITY + 1, &xTaskQueueReceive);
+	vTaskStartScheduler();
+	for(;;){}
+
+}
+// **********************Initialize********************************
+int initialize() {
+	int status;
+
+	// Initialize LEDs (GPIO driver initialization)
+	status = XGpio_Initialize(&LedInst, LED_DEVICE_ID);
+	if(status != XST_SUCCESS){
+		return XST_FAILURE;
+	}
+
+	// Initialize Push Buttons and Switches (GPIO driver initialization)
+	status = XGpio_Initialize(&BtnSwInst, BTNSW_DEVICE_ID);
+	if (status != XST_SUCCESS) {
+		return XST_FAILURE;
+	}
+
+	// Set LED directions to output
+	// Set button directions to input
+	// Set switch directions to input
+	XGpio_SetDataDirection(&LedInst, LED_CHANNEL, 0x00);
+	XGpio_SetDataDirection(&BtnSwInst, BTN_CHANNEL, 0xFF);
+	XGpio_SetDataDirection(&BtnSwInst, SW_CHANNEL, 0xFF);
+
+}
+// *********************TaskQueueSend*********************************
+static void vTaskQueueSend(void *pvParameters) {
+	int btn_data = 0;
+	int sw_data = 0;
+	int output = 0;
+	while (1) {
+
+		//Receive Logic
+		btn_data = XGpio_DiscreteRead(&BtnSwInst, BTN_CHANNEL);
+		sw_data = XGpio_DiscreteRead(&BtnSwInst, SW_CHANNEL);
+		if((btn_data & 0b0001) == 0b0001){
+			if (xQueueSend(xQueueBtnSw, (void *)&valueToSend, pdMS_TO_TICKS(100)) == pdPASS) {
+				// Data sent successfully
+				led_data += 1;
+			}
+		}
+		if(sw_data & 0b0001){
+			if (xQueueReset(xQueueBtnSw) == pdPASS) {
+				// Queue successfully reset
+				led_data = 0;
+			}
+		}
+		// increase in binary
+		output= 1;
+		for(int i = 0; i <led_data; i++){
+			output = output << 1;
+		}
+		output = output - 1;
+		XGpio_DiscreteWrite(&LedInst, LED_CHANNEL, output);
+
+		vTaskDelay(pdMS_TO_TICKS(100)); // Add a delay to yield control
+	}
+}
+// *************************TaskQueueReceive*********************************
+static void vTaskQueueReceive(void *pvParameters) {
+	int btn_data = 0;
+	int sw_data = 0;
+	int output = 0;
+	while (1) {
+
+		//Receive Logic
+		btn_data = XGpio_DiscreteRead(&BtnSwInst, BTN_CHANNEL);
+		sw_data = XGpio_DiscreteRead(&BtnSwInst, SW_CHANNEL);
+		if((btn_data & 0b0010) == 0b0010){
+			if (xQueueReceive(xQueueBtnSw, (void *)&receivedValue, pdMS_TO_TICKS(100)) == pdPASS) {
+			    // Data successfully received
+				led_data -= 1;
+			}
+		}
+		if(sw_data & 0b0001){
+			if (xQueueReset(xQueueBtnSw) == pdPASS) {
+			    // Queue successfully reset
+				led_data = 0;
+			}
+		}
+		// increase in binary
+		output= 1;
+		    for(int i = 0; i <led_data; i++){
+		        output = output << 1;
+		    }
+		output = output - 1;
+		XGpio_DiscreteWrite(&LedInst, LED_CHANNEL, output);
+		vTaskDelay(pdMS_TO_TICKS(100)); // Add a delay to yield control
+	}
+}
